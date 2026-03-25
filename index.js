@@ -3,20 +3,23 @@ require('dotenv').config();
 const express = require('express');
 const bodyParser = require('body-parser');
 const fetch = require('node-fetch');
+const dotenv = require('dotenv');
+
+dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 3000;
 
 app.use(bodyParser.json());
 
-
-
-// Webhook endpoint to handle product price updates
+// Webhook endpoint to handle product price updates from the source site
 app.post('/webhook', async (req, res) => {
-  // Log the incoming request payload
-  console.log("Webhook Payload:", req.body);
-
   const product = req.body;
+
+  // Log incoming product data (you can remove or reduce the log after testing)
+  console.log("Webhook Payload:", product);
+
+  // Extract SKU and updated price from the webhook payload
   const variants = product.variants;
   let updated = 0;
 
@@ -26,11 +29,11 @@ app.post('/webhook', async (req, res) => {
 
     if (sku && price) {
       try {
-        // Check if variant exists in the destination store
+        // Find the variant in the destination store by SKU
         const variantInDest = await findDestVariantBySku(sku);
-        
+
         if (variantInDest) {
-          // If variant exists, update the price
+          // If variant exists, update the price on the destination store
           await updatePrice(variantInDest.id, price);
           updated++;
         } else {
@@ -42,6 +45,7 @@ app.post('/webhook', async (req, res) => {
     }
   }
 
+  // Send success response after processing the updates
   res.status(200).send(`Successfully processed ${updated} price updates.`);
 });
 
@@ -49,7 +53,7 @@ app.post('/webhook', async (req, res) => {
 async function findDestVariantBySku(sku) {
   const query = `sku:"${sku}"`;
 
-  const data = await shopifyGraphQL(DEST_SHOP, DEST_TOKEN, `
+  const data = await shopifyGraphQL(process.env.DEST_SHOP, process.env.DEST_TOKEN, `
     query FindDestVariantBySku($query: String!) {
       productVariants(first: 5, query: $query) {
         nodes {
@@ -63,7 +67,7 @@ async function findDestVariantBySku(sku) {
         }
       }
     }
-  `, { query: sku });
+  `, { query });
 
   const exactMatches = data.productVariants.nodes.filter((v) => v.sku === sku);
 
@@ -75,13 +79,11 @@ async function findDestVariantBySku(sku) {
   return exactMatches[0];
 }
 
-// Function to update price in destination store
+// Function to update price in the destination store
 async function updatePrice(variantId, price) {
-  const input = {
-    price: price,
-  };
+  const input = { price };
 
-  const data = await shopifyGraphQL(DEST_SHOP, DEST_TOKEN, `
+  const data = await shopifyGraphQL(process.env.DEST_SHOP, process.env.DEST_TOKEN, `
     mutation UpdateProductPrice($id: ID!, $input: ProductVariantInput!) {
       productVariantUpdate(id: $id, input: $input) {
         productVariant {
