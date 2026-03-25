@@ -1,16 +1,11 @@
 require('dotenv').config();
 
 const express = require('express');
-const bodyParser = require('body-parser');
 const fetch = require('node-fetch');
-const dotenv = require('dotenv');
-
-dotenv.config();
-
 const app = express();
 const port = process.env.PORT || 3000;
 
-app.use(bodyParser.json());
+app.use(express.json());  // Built-in body parser for JSON
 
 // Webhook endpoint to handle product price updates from the source site
 app.post('/webhook', async (req, res) => {
@@ -19,7 +14,6 @@ app.post('/webhook', async (req, res) => {
   // Log incoming product data (you can remove or reduce the log after testing)
   console.log("Webhook Payload:", product);
 
-  // Extract SKU and updated price from the webhook payload
   const variants = product.variants;
   let updated = 0;
 
@@ -41,6 +35,8 @@ app.post('/webhook', async (req, res) => {
         }
       } catch (error) {
         console.error("Error during price update:", error);
+        res.status(500).send("Internal Server Error"); // Respond if error occurs
+        return;
       }
     }
   }
