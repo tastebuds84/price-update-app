@@ -3,14 +3,13 @@ require('dotenv').config();
 const express = require('express');
 const bodyParser = require('body-parser');
 const fetch = require('node-fetch');
-const dotenv = require('dotenv');
-
-dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 3000;
 
 app.use(bodyParser.json());
+
+
 
 // Webhook endpoint to handle product price updates
 app.post('/webhook', async (req, res) => {
@@ -142,3 +141,7 @@ async function shopifyGraphQL(shop, token, query, variables = {}) {
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });
+
+console.log("Destination Shopify Shop:", process.env.DEST_SHOP);
+console.log("Destination Shopify Token:", process.env.DEST_TOKEN);
+console.log("Webhook Payload:", req.body);
