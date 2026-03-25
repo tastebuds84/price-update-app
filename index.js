@@ -13,9 +13,10 @@ app.use(bodyParser.json());
 
 // Webhook endpoint to handle product price updates
 app.post('/webhook', async (req, res) => {
-  const product = req.body;
+  // Log the incoming request payload
+  console.log("Webhook Payload:", req.body);
 
-  // Extract SKU and updated price from the webhook payload
+  const product = req.body;
   const variants = product.variants;
   let updated = 0;
 
