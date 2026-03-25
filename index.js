@@ -142,7 +142,3 @@ async function shopifyGraphQL(shop, token, query, variables = {}) {
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });
-
-console.log("Destination Shopify Shop:", process.env.DEST_SHOP);
-console.log("Destination Shopify Token:", process.env.DEST_TOKEN);
-console.log("Webhook Payload:", req.body);
