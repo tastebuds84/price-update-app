@@ -287,6 +287,14 @@ async function updateDestinationVariantPrice({ productId, variantId, price }) {
   return data.productVariantsBulkUpdate;
 }
 
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}`);
+
+  try {
+    const callbackUrl = `${process.env.APP_URL}/webhook/products-update`;
+    const webhook = await registerSourceWebhook(callbackUrl);
+    console.log("Webhook registered:", webhook);
+  } catch (err) {
+    console.error("Failed to register webhook:", err.message);
+  }
 });
