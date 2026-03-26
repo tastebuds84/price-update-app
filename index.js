@@ -12,7 +12,29 @@ const SOURCE_WEBHOOK_SECRET = process.env.SOURCE_WEBHOOK_SECRET;
 
 const DEST_SHOP = process.env.DEST_SHOP;
 const DEST_ADMIN_TOKEN = process.env.DEST_ADMIN_TOKEN;
+const hmacHeader = req.get("X-Shopify-Hmac-Sha256");
+const shopDomain = req.get("X-Shopify-Shop-Domain");
+const topic = req.get("X-Shopify-Topic");
 
+console.log("Incoming webhook headers:");
+console.log("Shop domain:", shopDomain);
+console.log("Topic:", topic);
+console.log("HMAC header:", hmacHeader);
+console.log("Raw body length:", req.body.length);
+
+const rawBody = req.body;
+
+const generatedHmac = crypto
+  .createHmac("sha256", SOURCE_WEBHOOK_SECRET)
+  .update(rawBody)
+  .digest("base64");
+
+console.log("Generated HMAC:", generatedHmac);
+
+if (!hmacHeader || generatedHmac !== hmacHeader) {
+  console.error("HMAC validation failed");
+  return res.status(401).send("Invalid HMAC");
+}
 // IMPORTANT:
 // Shopify webhook HMAC verification must use the raw body.
 // So we use express.raw() only on the webhook route.
