@@ -18,40 +18,54 @@ const DEST_ADMIN_TOKEN = process.env.DEST_ADMIN_TOKEN;
 // So we use express.raw() only on the webhook route.
 app.post("/webhook/products-update", express.raw({ type: "*/*" }), async (req, res) => {
   try {
-    const hmacHeader = req.get("X-Shopify-Hmac-Sha256");
-    const shopDomain = req.get("X-Shopify-Shop-Domain");
-    const topic = req.get("X-Shopify-Topic");
+const hmacHeader = req.get("X-Shopify-Hmac-Sha256");
+const shopDomain = req.get("X-Shopify-Shop-Domain");
+const topic = req.get("X-Shopify-Topic");
 
-    if (!hmacHeader) {
-      console.error("Missing HMAC header");
-      return res.status(401).send("Missing HMAC");
-    }
+console.log("Incoming webhook:");
+console.log("Shop domain:", shopDomain);
+console.log("Expected SOURCE_SHOP:", SOURCE_SHOP);
+console.log("Topic:", topic);
+console.log("HMAC header:", hmacHeader);
+console.log("Raw body length:", req.body.length);
+console.log("Webhook secret exists:", !!SOURCE_WEBHOOK_SECRET);
 
-    if (shopDomain !== SOURCE_SHOP) {
-      console.error(`Unexpected shop domain: ${shopDomain}`);
-      return res.status(401).send("Invalid shop domain");
-    }
+if (!hmacHeader) {
+  console.error("Missing HMAC header");
+  return res.status(401).send("Missing HMAC");
+}
 
-    if (topic !== "products/update") {
-      console.error(`Unexpected topic: ${topic}`);
-      return res.status(400).send("Unexpected webhook topic");
-    }
+if (shopDomain !== SOURCE_SHOP) {
+  console.error(`Unexpected shop domain: ${shopDomain}`);
+  return res.status(401).send("Invalid shop domain");
+}
 
-    const rawBody = req.body; // Buffer
-    const digest = crypto
-      .createHmac("sha256", SOURCE_WEBHOOK_SECRET)
-      .update(rawBody, "utf8")
-      .digest("base64");
+if (topic !== "products/update") {
+  console.error(`Unexpected topic: ${topic}`);
+  return res.status(400).send("Unexpected webhook topic");
+}
 
-    const valid = crypto.timingSafeEqual(
-      Buffer.from(digest, "utf8"),
-      Buffer.from(hmacHeader, "utf8")
-    );
+const rawBody = req.body;
 
-    if (!valid) {
-      console.error("HMAC validation failed");
-      return res.status(401).send("Invalid HMAC");
-    }
+const digest = crypto
+  .createHmac("sha256", SOURCE_WEBHOOK_SECRET)
+  .update(rawBody)
+  .digest("base64");
+
+console.log("Generated digest:", digest);
+
+const valid =
+  hmacHeader &&
+  Buffer.byteLength(digest, "utf8") === Buffer.byteLength(hmacHeader, "utf8") &&
+  crypto.timingSafeEqual(
+    Buffer.from(digest, "utf8"),
+    Buffer.from(hmacHeader, "utf8")
+  );
+
+if (!valid) {
+  console.error("HMAC validation failed");
+  return res.status(401).send("Invalid HMAC");
+}
 
     const product = JSON.parse(rawBody.toString("utf8"));
 
