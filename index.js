@@ -123,6 +123,47 @@ app.post("/webhook/products-update", express.raw({ type: "*/*" }), async (req, r
   }
 });
 
+async function listSourceWebhooks() {
+  const query = `
+    query {
+      webhookSubscriptions(first: 50, topics: [PRODUCTS_UPDATE]) {
+        edges {
+          node {
+            id
+            topic
+            uri
+          }
+        }
+      }
+    }
+  `;
+
+  const data = await sourceGraphQL(query);
+  return data.webhookSubscriptions.edges.map(edge => edge.node);
+}
+
+async function deleteSourceWebhook(id) {
+  const mutation = `
+    mutation DeleteWebhook($id: ID!) {
+      webhookSubscriptionDelete(id: $id) {
+        deletedWebhookSubscriptionId
+        userErrors {
+          field
+          message
+        }
+      }
+    }
+  `;
+
+  const data = await sourceGraphQL(mutation, { id });
+
+  if (data.webhookSubscriptionDelete.userErrors?.length) {
+    throw new Error(JSON.stringify(data.webhookSubscriptionDelete.userErrors));
+  }
+
+  return data.webhookSubscriptionDelete;
+}
+
 async function getSourceAccessToken() {
   const response = await fetch(`https://${SOURCE_SHOP}/admin/oauth/access_token`, {
     method: "POST",
@@ -292,8 +333,19 @@ app.listen(PORT, async () => {
 
   try {
     const callbackUrl = `${process.env.APP_URL}/webhook/products-update`;
-    const webhook = await registerSourceWebhook(callbackUrl);
-    console.log("Webhook registered:", webhook);
+
+    const existing = await listSourceWebhooks();
+    console.log("Existing source webhooks:", existing);
+
+    for (const webhook of existing) {
+      if (webhook.uri === callbackUrl) {
+        await deleteSourceWebhook(webhook.id);
+        console.log("Deleted old webhook:", webhook.id);
+      }
+    }
+
+    const newWebhook = await registerSourceWebhook(callbackUrl);
+    console.log("Webhook registered:", newWebhook);
   } catch (err) {
     console.error("Failed to register webhook:", err.message);
   }
