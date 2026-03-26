@@ -4,7 +4,7 @@ const express = require("express");
 const crypto = require("crypto");
 
 const app = express();
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 3000;
 const API_VERSION = process.env.SHOPIFY_API_VERSION || "2026-01";
 
 const SOURCE_SHOP = process.env.SOURCE_SHOP;
@@ -12,30 +12,42 @@ const SOURCE_WEBHOOK_SECRET = process.env.SOURCE_WEBHOOK_SECRET;
 
 const DEST_SHOP = process.env.DEST_SHOP;
 const DEST_ADMIN_TOKEN = process.env.DEST_ADMIN_TOKEN;
+const hmacHeader = req.get("X-Shopify-Hmac-Sha256");
+const shopDomain = req.get("X-Shopify-Shop-Domain");
+const topic = req.get("X-Shopify-Topic");
 
-function safeCompare(a, b) {
-  const bufA = Buffer.from(a || "", "utf8");
-  const bufB = Buffer.from(b || "", "utf8");
+console.log("Incoming webhook headers:");
+console.log("Shop domain:", shopDomain);
+console.log("Topic:", topic);
+console.log("HMAC header:", hmacHeader);
+console.log("Raw body length:", req.body.length);
 
-  if (bufA.length !== bufB.length) return false;
-  return crypto.timingSafeEqual(bufA, bufB);
+const rawBody = req.body;
+
+const generatedHmac = crypto
+  .createHmac("sha256", SOURCE_WEBHOOK_SECRET)
+  .update(rawBody)
+  .digest("base64");
+
+console.log("Generated HMAC:", generatedHmac);
+
+if (!hmacHeader || generatedHmac !== hmacHeader) {
+  console.error("HMAC validation failed");
+  return res.status(401).send("Invalid HMAC");
 }
-
-app.get("/", (req, res) => {
-  res.send("Shopify price sync server is running.");
-});
-
+// IMPORTANT:
+// Shopify webhook HMAC verification must use the raw body.
+// So we use express.raw() only on the webhook route.
 app.post("/webhook/products-update", express.raw({ type: "*/*" }), async (req, res) => {
   try {
     const hmacHeader = req.get("X-Shopify-Hmac-Sha256");
     const shopDomain = req.get("X-Shopify-Shop-Domain");
     const topic = req.get("X-Shopify-Topic");
 
-    console.log("Incoming webhook:");
-    console.log("Shop domain:", shopDomain);
-    console.log("Topic:", topic);
-    console.log("HMAC header:", hmacHeader);
-    console.log("Raw body length:", req.body.length);
+    if (!hmacHeader) {
+      console.error("Missing HMAC header");
+      return res.status(401).send("Missing HMAC");
+    }
 
     if (shopDomain !== SOURCE_SHOP) {
       console.error(`Unexpected shop domain: ${shopDomain}`);
@@ -44,19 +56,21 @@ app.post("/webhook/products-update", express.raw({ type: "*/*" }), async (req, r
 
     if (topic !== "products/update") {
       console.error(`Unexpected topic: ${topic}`);
-      return res.status(400).send("Unexpected topic");
+      return res.status(400).send("Unexpected webhook topic");
     }
 
-    const rawBody = req.body;
-
-    const generatedHmac = crypto
+    const rawBody = req.body; // Buffer
+    const digest = crypto
       .createHmac("sha256", SOURCE_WEBHOOK_SECRET)
-      .update(rawBody)
+      .update(rawBody, "utf8")
       .digest("base64");
 
-    console.log("Generated HMAC:", generatedHmac);
+    const valid = crypto.timingSafeEqual(
+      Buffer.from(digest, "utf8"),
+      Buffer.from(hmacHeader, "utf8")
+    );
 
-    if (!safeCompare(generatedHmac, hmacHeader)) {
+    if (!valid) {
       console.error("HMAC validation failed");
       return res.status(401).send("Invalid HMAC");
     }
@@ -66,6 +80,7 @@ app.post("/webhook/products-update", express.raw({ type: "*/*" }), async (req, r
     console.log(`Webhook received for product: ${product.id} / ${product.title || "Untitled"}`);
 
     if (!Array.isArray(product.variants) || product.variants.length === 0) {
+      console.log("No variants found in webhook payload");
       return res.status(200).send("No variants");
     }
 
@@ -78,6 +93,7 @@ app.post("/webhook/products-update", express.raw({ type: "*/*" }), async (req, r
       const newPrice = variant.price != null ? String(variant.price).trim() : "";
 
       if (!sku || !newPrice) {
+        console.log(`Skipping variant with missing sku/price. SKU="${sku}" PRICE="${newPrice}"`);
         skippedCount++;
         continue;
       }
@@ -94,7 +110,7 @@ app.post("/webhook/products-update", express.raw({ type: "*/*" }), async (req, r
         const currentDestPrice = String(destVariant.price ?? "").trim();
 
         if (currentDestPrice === newPrice) {
-          console.log(`Price already same for SKU ${sku}, skipping`);
+          console.log(`Price already same for SKU ${sku}. Skipping.`);
           skippedCount++;
           continue;
         }
@@ -105,7 +121,10 @@ app.post("/webhook/products-update", express.raw({ type: "*/*" }), async (req, r
           price: newPrice,
         });
 
-        console.log(`Updated SKU ${sku}: ${currentDestPrice} -> ${newPrice}`);
+        console.log(
+          `Updated SKU ${sku}: ${currentDestPrice || "N/A"} -> ${newPrice}`
+        );
+
         updatedCount++;
       } catch (err) {
         console.error(`Error processing SKU ${sku}:`, err.message);
@@ -113,7 +132,11 @@ app.post("/webhook/products-update", express.raw({ type: "*/*" }), async (req, r
       }
     }
 
-    console.log({ updatedCount, skippedCount, errorCount });
+    console.log({
+      updatedCount,
+      skippedCount,
+      errorCount,
+    });
 
     return res.status(200).send("Webhook processed");
   } catch (err) {
@@ -122,6 +145,13 @@ app.post("/webhook/products-update", express.raw({ type: "*/*" }), async (req, r
   }
 });
 
+app.get("/", (req, res) => {
+  res.send("Shopify price sync server is running.");
+});
+
+// -----------------------------
+// Shopify GraphQL helper
+// -----------------------------
 async function shopifyGraphQL(shop, token, query, variables = {}) {
   const response = await fetch(`https://${shop}/admin/api/${API_VERSION}/graphql.json`, {
     method: "POST",
@@ -135,7 +165,9 @@ async function shopifyGraphQL(shop, token, query, variables = {}) {
   const data = await response.json();
 
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status}: ${JSON.stringify(data)}`);
+    throw new Error(
+      `HTTP ${response.status} from Shopify ${shop}: ${JSON.stringify(data)}`
+    );
   }
 
   if (data.errors) {
@@ -145,6 +177,9 @@ async function shopifyGraphQL(shop, token, query, variables = {}) {
   return data.data;
 }
 
+// -----------------------------
+// Find destination variant by SKU
+// -----------------------------
 async function findDestinationVariantBySku(sku) {
   const query = `
     query FindVariantBySku($query: String!) {
@@ -165,18 +200,36 @@ async function findDestinationVariantBySku(sku) {
   `;
 
   const variables = {
-    query: \`sku:${sku}\`,
+    query: `sku:${sku}`,
   };
 
   const data = await shopifyGraphQL(DEST_SHOP, DEST_ADMIN_TOKEN, query, variables);
+
   const matches = data.productVariants.edges.map(edge => edge.node);
-  return matches.find(v => String(v.sku).trim() === sku) || null;
+
+  // Exact match only, to avoid partial surprises
+  const exact = matches.find(v => String(v.sku).trim() === sku);
+
+  if (matches.length > 1) {
+    console.warn(`Multiple variants returned for SKU ${sku}. Using exact first match if found.`);
+  }
+
+  return exact || null;
 }
 
+// -----------------------------
+// Update destination variant price
+// Shopify recommends GraphQL for new work.
+// productVariantsBulkUpdate updates variants for a single product.
+// -----------------------------
 async function updateDestinationVariantPrice({ productId, variantId, price }) {
   const mutation = `
     mutation UpdateVariantPrice($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
       productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+        product {
+          id
+          title
+        }
         productVariants {
           id
           price
@@ -202,11 +255,13 @@ async function updateDestinationVariantPrice({ productId, variantId, price }) {
 
   const data = await shopifyGraphQL(DEST_SHOP, DEST_ADMIN_TOKEN, mutation, variables);
 
-  if (data.productVariantsBulkUpdate.userErrors?.length) {
-    throw new Error(JSON.stringify(data.productVariantsBulkUpdate.userErrors));
+  const result = data.productVariantsBulkUpdate;
+
+  if (result.userErrors && result.userErrors.length > 0) {
+    throw new Error(`Mutation userErrors: ${JSON.stringify(result.userErrors)}`);
   }
 
-  return data.productVariantsBulkUpdate;
+  return result;
 }
 
 app.listen(PORT, () => {
